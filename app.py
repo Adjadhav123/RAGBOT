@@ -511,6 +511,9 @@ def get_document_stats():
     return jsonify(document_stats)
 
 if __name__ == '__main__':
-    # Disable reloader on Windows to avoid socket error
+    # For local development
     use_reloader = False if platform.system() == "Windows" else True
     app.run(debug=True, host='0.0.0.0', port=3000, use_reloader=use_reloader)
+
+# Export the app for Vercel
+vercel_app = app

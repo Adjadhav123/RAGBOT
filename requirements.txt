@@ -9,7 +9,7 @@ langchain
 langchain-community
 langchain-core
 langchain-groq
-sentence-transformers
+langchain-huggingface
 
 # Vector stores
 faiss-cpu
