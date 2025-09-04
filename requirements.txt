@@ -10,9 +10,6 @@ langchain-community
 langchain-core
 langchain-groq
 langchain-ollama
-llama-index
-openai
-pydantic
 
 # Vector stores
 faiss-cpu
@@ -24,4 +21,3 @@ pypdf
 # Utilities
 uuid
 requests
-tqdm
