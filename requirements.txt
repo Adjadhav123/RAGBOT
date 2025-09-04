@@ -1,22 +1,22 @@
 # Web framework
-Flask==3.0.3
-flask-cors==4.0.1
-python-dotenv==1.0.1
-gunicorn==23.0.0
+Flask
+flask-cors
+python-dotenv
+gunicorn
 
 # LangChain & ecosystem
-langchain==0.2.11
-langchain-community==0.2.10
-langchain-core==0.2.23
-langchain-groq==0.1.5
-langchain-ollama==0.1.3
+langchain
+langchain-community
+langchain-core
+langchain-groq
+langchain-ollama
 
 # Vector stores
-faiss-cpu==1.8.0
-chromadb==0.5.5
+faiss-cpu
+chromadb
 
 # PDF Loader
-pypdf==4.2.0
+pypdf
 
 # Utilities
-uuid==1.30
+uuid
