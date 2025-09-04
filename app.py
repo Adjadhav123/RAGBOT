@@ -9,7 +9,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
@@ -54,12 +54,17 @@ CORS(app)  # Enable CORS for all routes
 # Load environment variables
 load_dotenv()
 
-# Set up embeddings
+# Set up embeddings - Using HuggingFace embeddings for cloud deployment
 try:
-    embeddings = OllamaEmbeddings(model="all-minilm")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
+    )
+    logger.info("Successfully initialized HuggingFace embeddings")
 except Exception as e:
-    logger.error(f"Failed to initialize Ollama embeddings: {e}")
-    raise ValueError("Could not initialize embeddings. Ensure Ollama is running with all-minilm model.")
+    logger.error(f"Failed to initialize HuggingFace embeddings: {e}")
+    raise ValueError("Could not initialize embeddings.")
 
 # In-memory store for chat history
 store = {}
@@ -149,8 +154,8 @@ def upload_pdf():
                 import threading
                 import queue
                 
-                def load_pdf_with_timeout(loader, timeout=30):
-                    """Load PDF with timeout protection"""
+                def load_pdf_with_timeout(loader, timeout=60):
+                    """Load PDF with timeout protection - increased for cloud deployment"""
                     result_queue = queue.Queue()
                     exception_queue = queue.Queue()
                     
@@ -179,11 +184,11 @@ def upload_pdf():
                     raise Exception("Unknown error during PDF processing")
                 
                 try:
-                    docs = load_pdf_with_timeout(loader, timeout=30)
+                    docs = load_pdf_with_timeout(loader, timeout=60)
                     logger.info(f"Loaded {len(docs)} pages from {file.filename}")
                 except TimeoutError:
                     logger.error(f"Timeout processing PDF {file.filename}")
-                    return jsonify({"error": f"PDF {file.filename} is too complex to process. Please try a simpler PDF."}), 400
+                    return jsonify({"error": f"PDF {file.filename} is too large or complex to process. Please try a smaller PDF."}), 400
                 except Exception as pdf_error:
                     logger.error(f"PDF parsing error for {file.filename}: {pdf_error}")
                     return jsonify({"error": f"Unable to read PDF {file.filename}. File may be corrupted or password protected."}), 400
@@ -253,9 +258,30 @@ def upload_pdf():
         
         logger.info(f"Created {len(splits)} text chunks")
         
-        # Create FAISS vector store with optimized configuration
+        # Create FAISS vector store with optimized configuration and error handling
         logger.info("Creating FAISS vector store")
-        vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
+        try:
+            # Process embeddings in smaller batches to avoid memory issues
+            batch_size = 50  # Process 50 chunks at a time for embeddings
+            if len(splits) <= batch_size:
+                vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
+            else:
+                # Create vectorstore with first batch
+                first_batch = splits[:batch_size]
+                vectorstore = FAISS.from_documents(documents=first_batch, embedding=embeddings)
+                
+                # Add remaining batches
+                for i in range(batch_size, len(splits), batch_size):
+                    batch = splits[i:i+batch_size]
+                    if batch:  # Only if batch is not empty
+                        batch_vectorstore = FAISS.from_documents(documents=batch, embedding=embeddings)
+                        vectorstore.merge_from(batch_vectorstore)
+                        logger.info(f"Processed embedding batch {i//batch_size + 1}")
+            
+            logger.info("Successfully created FAISS vector store")
+        except Exception as embedding_error:
+            logger.error(f"Error creating vector store: {embedding_error}")
+            return jsonify({"error": "Failed to create vector store. Please try with a smaller PDF."}), 500
         # Configure retriever to get more relevant documents
         retriever = vectorstore.as_retriever(
             search_type="similarity",
@@ -389,8 +415,8 @@ def chat():
         import threading
         import queue
         
-        def chat_with_timeout(chain, input_data, config, timeout=45):
-            """Process chat with timeout protection"""
+        def chat_with_timeout(chain, input_data, config, timeout=60):
+            """Process chat with timeout protection - increased for cloud deployment"""
             result_queue = queue.Queue()
             exception_queue = queue.Queue()
             
@@ -423,7 +449,7 @@ def chat():
                 conversational_rag_chain,
                 {"input": user_input},
                 {"configurable": {"session_id": session_id}},
-                timeout=45
+                timeout=60
             )
         except TimeoutError:
             logger.error("Chat response timeout")
