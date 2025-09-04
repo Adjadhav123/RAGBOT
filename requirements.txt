@@ -13,3 +13,4 @@ chromadb
 sentence-transformers
 langchain_huggingface
 gunicorn
+flask
