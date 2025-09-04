@@ -1,0 +1,36 @@
+# Environment variables (contains API keys)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Uploaded files (don't commit user uploads)
+uploads/
+*.pdf
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+
+# Node modules (if any)
+node_modules/
