@@ -3,6 +3,7 @@ import uuid
 import time as time_module
 import platform
 import re
+import signal
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -95,6 +96,11 @@ def get_session_history(session_id: str) -> ChatMessageHistory:
         store[session_id] = ChatMessageHistory()
     return store[session_id]
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring"""
+    return jsonify({"status": "healthy", "service": "ragbot"}), 200
+
 @app.route('/')
 def index():
     logger.info("Serving index.html")
@@ -135,45 +141,119 @@ def upload_pdf():
             logger.info(f"Saved file {file.filename} as {filename}")
             try:
                 logger.info(f"Starting extraction for {file.filename}")
+                
+                # Create loader with error handling for corrupted PDFs
                 loader = PyPDFLoader(file_path)
-                docs = loader.load()
-                logger.info(f"Loaded {len(docs)} pages from {file.filename}")
+                
+                # Add timeout protection for large PDF processing
+                import threading
+                import queue
+                
+                def load_pdf_with_timeout(loader, timeout=30):
+                    """Load PDF with timeout protection"""
+                    result_queue = queue.Queue()
+                    exception_queue = queue.Queue()
+                    
+                    def load_worker():
+                        try:
+                            docs = loader.load()
+                            result_queue.put(docs)
+                        except Exception as e:
+                            exception_queue.put(e)
+                    
+                    thread = threading.Thread(target=load_worker)
+                    thread.daemon = True
+                    thread.start()
+                    thread.join(timeout)
+                    
+                    if thread.is_alive():
+                        # Thread is still running, timeout occurred
+                        raise TimeoutError("PDF processing timeout")
+                    
+                    if not exception_queue.empty():
+                        raise exception_queue.get()
+                    
+                    if not result_queue.empty():
+                        return result_queue.get()
+                    
+                    raise Exception("Unknown error during PDF processing")
+                
+                try:
+                    docs = load_pdf_with_timeout(loader, timeout=30)
+                    logger.info(f"Loaded {len(docs)} pages from {file.filename}")
+                except TimeoutError:
+                    logger.error(f"Timeout processing PDF {file.filename}")
+                    return jsonify({"error": f"PDF {file.filename} is too complex to process. Please try a simpler PDF."}), 400
+                except Exception as pdf_error:
+                    logger.error(f"PDF parsing error for {file.filename}: {pdf_error}")
+                    return jsonify({"error": f"Unable to read PDF {file.filename}. File may be corrupted or password protected."}), 400
+                
                 if not docs:
                     logger.warning(f"No pages found in PDF {file.filename}, skipping.")
                     continue
-                # Simulate longer extraction for user feedback
-                time_module.sleep(2)  # Simulate extraction delay
-                # Preprocess document text for better quality
-                for doc in docs:
-                    doc.page_content = preprocess_document_text(doc.page_content)
-                    # Add metadata for better context
-                    doc.metadata['source_file'] = file.filename
-                    doc.metadata['file_type'] = 'PDF'
-                documents.extend(docs[:100])  # Limit to 100 pages to avoid overload
-                logger.info(f"Processed {len(docs[:100])} pages from {file.filename}")
+                
+                # Remove the sleep to reduce processing time in production
+                # time_module.sleep(2)  # Removed for production efficiency
+                
+                # Limit processing to smaller chunks for memory efficiency
+                max_pages = min(50, len(docs))  # Reduced from 100 to 50 pages max
+                processed_docs = []
+                
+                for i, doc in enumerate(docs[:max_pages]):
+                    try:
+                        # Process each page with error handling
+                        if len(doc.page_content.strip()) > 20:  # Only process pages with content
+                            doc.page_content = preprocess_document_text(doc.page_content)
+                            doc.metadata['source_file'] = file.filename
+                            doc.metadata['file_type'] = 'PDF'
+                            doc.metadata['page_number'] = i + 1
+                            processed_docs.append(doc)
+                    except Exception as page_error:
+                        logger.warning(f"Error processing page {i+1} of {file.filename}: {page_error}")
+                        continue
+                
+                documents.extend(processed_docs)
+                logger.info(f"Successfully processed {len(processed_docs)} pages from {file.filename}")
+                
             except Exception as e:
                 logger.error(f"Failed to process PDF {file.filename}: {e}")
-                return jsonify({"error": f"Failed to process {file.filename}"}), 400
+                # Continue with other files instead of failing completely
+                continue
     
     if not documents:
         logger.warning("No valid PDF files uploaded")
         return jsonify({"error": "No valid PDF files uploaded"}), 400
     
     try:
-        # Split documents with better chunking strategy
-        logger.info("Splitting documents")
+        # Split documents with memory-efficient chunking strategy
+        logger.info(f"Splitting {len(documents)} documents")
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,  # Increased chunk size for better context
-            chunk_overlap=200,  # Increased overlap to maintain continuity
+            chunk_size=800,  # Reduced chunk size for better memory usage
+            chunk_overlap=150,  # Reduced overlap for memory efficiency
             length_function=len,
-            separators=["\n\n", "\n", " ", ""]  # Better separators for meaningful chunks
+            separators=["\n\n", "\n", ". ", " ", ""]  # Better separators for meaningful chunks
         )
-        splits = text_splitter.split_documents(documents)
         
-        # Filter out very short chunks that might not be meaningful
-        splits = [doc for doc in splits if len(doc.page_content.strip()) > 50]
+        # Process documents in batches to avoid memory issues
+        splits = []
+        batch_size = 10  # Process 10 documents at a time
         
-        # Create FAISS vector store with better configuration
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i+batch_size]
+            batch_splits = text_splitter.split_documents(batch)
+            splits.extend(batch_splits)
+            logger.info(f"Processed batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1}")
+        
+        # Filter out very short chunks and limit total chunks for memory
+        splits = [doc for doc in splits if len(doc.page_content.strip()) > 30]
+        max_chunks = 500  # Limit total chunks to avoid memory issues
+        if len(splits) > max_chunks:
+            splits = splits[:max_chunks]
+            logger.info(f"Limited chunks to {max_chunks} for memory efficiency")
+        
+        logger.info(f"Created {len(splits)} text chunks")
+        
+        # Create FAISS vector store with optimized configuration
         logger.info("Creating FAISS vector store")
         vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
         # Configure retriever to get more relevant documents
@@ -305,10 +385,49 @@ def chat():
         return jsonify({"error": "Please upload a PDF first"}), 400
     
     try:
-        response = conversational_rag_chain.invoke(
-            {"input": user_input},
-            config={"configurable": {"session_id": session_id}},
-        )
+        # Add timeout protection for chat responses using threading
+        import threading
+        import queue
+        
+        def chat_with_timeout(chain, input_data, config, timeout=45):
+            """Process chat with timeout protection"""
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def chat_worker():
+                try:
+                    response = chain.invoke(input_data, config=config)
+                    result_queue.put(response)
+                except Exception as e:
+                    exception_queue.put(e)
+            
+            thread = threading.Thread(target=chat_worker)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout)
+            
+            if thread.is_alive():
+                # Thread is still running, timeout occurred
+                raise TimeoutError("Chat response timeout")
+            
+            if not exception_queue.empty():
+                raise exception_queue.get()
+            
+            if not result_queue.empty():
+                return result_queue.get()
+            
+            raise Exception("Unknown error during chat processing")
+        
+        try:
+            response = chat_with_timeout(
+                conversational_rag_chain,
+                {"input": user_input},
+                {"configurable": {"session_id": session_id}},
+                timeout=45
+            )
+        except TimeoutError:
+            logger.error("Chat response timeout")
+            return jsonify({"error": "Request timeout. Please try a simpler question or check your connection."}), 408
         
         # Extract source information from retrieved documents
         source_info = []

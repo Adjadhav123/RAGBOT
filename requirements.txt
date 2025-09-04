@@ -1,14 +1,27 @@
-langchain
+# Web framework
+Flask
+flask-cors
 python-dotenv
-ipykernel
-langchain_community
-pypdf
-bs4
-arxiv
-pymupdf
-wikipedia
-langchain-text-splitters
-langchain-openai
+gunicorn
+
+# LangChain & ecosystem
+langchain
+langchain-community
+langchain-core
+langchain-groq
+langchain-ollama
+llama-index
+openai
+pydantic
+
+# Vector stores
+faiss-cpu
 chromadb
-sentence-transformers
-langchain_huggingface
+
+# PDF Loader
+pypdf
+
+# Utilities
+uuid
+requests
+tqdm
